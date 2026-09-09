@@ -661,6 +661,62 @@ class TPVShellTestCase(unittest.TestCase):
             f"Expected 'id: magrathea' destination\n{output}",
         )
 
+    def test_dry_run_with_job_state(self):
+        # --job-state resubmitted should fire the resubmit_increase_memory rule,
+        # bumping mem from the default `cores * 3` to `cores * 8`.
+        job_config = os.path.join(os.path.dirname(__file__), "fixtures/job_conf_dry_run.yml")
+        tpv_config = os.path.join(os.path.dirname(__file__), "fixtures/mapping-rules.yml")
+        output = self.call_shell_command(
+            "tpv",
+            "dry-run",
+            "--job-conf",
+            job_config,
+            "--tool",
+            "stress_ng",
+            "--input-size",
+            "6",
+            "--job-state",
+            "resubmitted",
+            tpv_config,
+        )
+        self.assertIn(
+            "id: stress_ng_host",
+            output,
+            f"Expected 'id: stress_ng_host' destination\n{output}",
+        )
+        self.assertIn(
+            "--mem 16",
+            output,
+            f"Expected resubmit rule to raise mem to 16\n{output}",
+        )
+
+    def test_dry_run_with_default_job_state(self):
+        # A rule referencing job.state should not crash when --job-state is not
+        # passed, and the state-dependent rule should not fire.
+        job_config = os.path.join(os.path.dirname(__file__), "fixtures/job_conf_dry_run.yml")
+        tpv_config = os.path.join(os.path.dirname(__file__), "fixtures/mapping-rules.yml")
+        output = self.call_shell_command(
+            "tpv",
+            "dry-run",
+            "--job-conf",
+            job_config,
+            "--tool",
+            "stress_ng",
+            "--input-size",
+            "6",
+            tpv_config,
+        )
+        self.assertIn(
+            "id: stress_ng_host",
+            output,
+            f"Expected 'id: stress_ng_host' destination\n{output}",
+        )
+        self.assertIn(
+            "--mem 6",
+            output,
+            f"Expected default mem of 6, resubmit rule should not have fired\n{output}",
+        )
+
     def test_dry_run_with_explain_flag(self):
         job_config = os.path.join(os.path.dirname(__file__), "fixtures/job_conf_dry_run.yml")
         tpv_config = os.path.join(os.path.dirname(__file__), "fixtures/mapping-rules.yml")
