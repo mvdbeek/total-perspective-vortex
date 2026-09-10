@@ -48,11 +48,20 @@ class TestMapperResourceRequirements(unittest.TestCase):
         self.assertEqual(result, {"cores": 4})
 
     def test_extract_resource_requirements_from_tool_memory(self):
+        # Galaxy ram_min is in mebibytes, TPV mem is in GB
         mem_req = ResourceRequirement("8192", "ram_min")
 
         tool = mock_galaxy.Tool("test_tool", resource_requirements=[mem_req])
         result = extract_resource_requirements_from_tool(tool)
-        self.assertEqual(result, {"mem": 8192})
+        self.assertEqual(result, {"mem": 8})
+
+    def test_extract_resource_requirements_from_tool_memory_fractional(self):
+        # Galaxy's default ram_min for a resource requirement block is 256 MiB
+        mem_req = ResourceRequirement("256", "ram_min")
+
+        tool = mock_galaxy.Tool("test_tool", resource_requirements=[mem_req])
+        result = extract_resource_requirements_from_tool(tool)
+        self.assertEqual(result, {"mem": 0.25})
 
     def test_extract_resource_requirements_from_tool_gpus(self):
         gpu_req = ResourceRequirement("2", "cuda_device_count_min")
@@ -68,7 +77,7 @@ class TestMapperResourceRequirements(unittest.TestCase):
 
         tool = mock_galaxy.Tool("test_tool", resource_requirements=[cores_req, mem_req, gpu_req])
         result = extract_resource_requirements_from_tool(tool)
-        expected = {"cores": 4, "mem": 16384, "gpus": 1}
+        expected = {"cores": 4, "mem": 16, "gpus": 1}
         self.assertEqual(result, expected)
 
     def test_extract_resource_requirements_with_not_implemented_error(self):
@@ -126,7 +135,7 @@ class TestMapperResourceRequirements(unittest.TestCase):
 
     def test_default_entity_creation_with_resource_requirements(self):
         cores_req = ResourceRequirement("2", "cores_min")
-        ram_min_req = ResourceRequirement("12", "ram_min")
+        ram_min_req = ResourceRequirement("12288", "ram_min")
 
         tool = mock_galaxy.Tool("nonexistent_tool", resource_requirements=[cores_req, ram_min_req])
         user = mock_galaxy.User("test_user", "test@test.com")
@@ -147,12 +156,12 @@ class TestMapperResourceRequirements(unittest.TestCase):
             "test_tool", resource_requirements=[cores_min_req, cores_max_req, ram_min_req, ram_max_req]
         )
         result = extract_resource_requirements_from_tool(tool)
-        expected = {"cores": 2, "max_cores": 8, "mem": 4096, "max_mem": 32768}
+        expected = {"cores": 2, "max_cores": 8, "mem": 4, "max_mem": 32}
         self.assertEqual(result, expected)
 
     def test_default_entity_creation_overrides_resource_requirements(self):
         cores_req = ResourceRequirement("3", "cores_min")
-        mem_req = ResourceRequirement("8", "ram_min")
+        mem_req = ResourceRequirement("8192", "ram_min")
         gpu_req = ResourceRequirement("2", "cuda_device_count_min")
 
         tool = mock_galaxy.Tool("nonexistent_tool", resource_requirements=[cores_req, mem_req, gpu_req])

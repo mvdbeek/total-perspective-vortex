@@ -296,13 +296,17 @@ Mapped fields are:
 
 * ``cores_min`` -> ``cores``
 * ``cores_max`` -> ``max_cores``
-* ``ram_min`` -> ``mem``
-* ``ram_max`` -> ``max_mem``
+* ``ram_min`` -> ``mem`` (converted from mebibytes to GB)
+* ``ram_max`` -> ``max_mem`` (converted from mebibytes to GB)
 * ``cuda_device_count_min`` -> ``gpus``
 * ``cuda_device_count_max`` -> ``max_gpus``
 
 If the same resource is also defined in TPV ``tools:``, the TPV configuration value overrides the
 auto-injected value.
+
+Galaxy expresses ``ram_min`` and ``ram_max`` in mebibytes (2**20 bytes), whereas TPV's ``mem`` and
+``max_mem`` are in GB, so the values are divided by 1024 when injected. A tool declaring ``ram_min=16384``
+is injected as ``mem: 16``.
 
 For example, with a tool that declares ``cores_min=8`` and ``ram_min=16384`` in Galaxy's tool XML:
 
@@ -311,14 +315,14 @@ For example, with a tool that declares ``cores_min=8`` and ``ram_min=16384`` in 
 
    tools:
      default:
-      mem: 8  # The Galaxy tool wrapper's ram_min would override this default value
+      mem: 8  # The Galaxy tool wrapper's ram_min (16384 MiB -> 16 GB) would override this default value
      my_tool:
        mem: 32  # but this specific override takes priority over ram_min
    destinations:
      slurm:
        runner: slurm
        max_accepted_cores: 16
-       max_accepted_mem: 32768
+       max_accepted_mem: 32
 
 Note that tool resource requirements override tool defaults.
 
