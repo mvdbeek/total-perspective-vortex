@@ -98,16 +98,15 @@ class OversizePolicy(BaseModel):
 class StoreConfig(BaseModel):
     """Infrastructure wiring for the allocation store, declared under
     ``global.resource_pool_store``. Only backend wiring belongs here -- a store class plus its
-    options (url, ttl, key_prefix, ...); pool *policy* is expressed as ``pools:`` entities::
+    options (url, key_prefix, ...); pool *policy* is expressed as ``pools:`` entities::
 
         global:
           resource_pool_store:
             class: tpv.core.resource_pool.ValkeyAllocationStore
             url: valkey://localhost:6379/0
-            ttl: 3600
     """
 
-    # Extra keys (url, ttl, key_prefix, ...) are collected and passed to the store constructor.
+    # Extra keys (url, key_prefix, ...) are collected and passed to the store constructor.
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     store_class: str = Field(alias="class", default="tpv.core.resource_pool.ValkeyAllocationStore")
@@ -187,7 +186,7 @@ class AllocationStore(ABC):
 
 class InMemoryAllocationStore(AllocationStore):
     """Process-local store for tests and single-process deployments. Atomicity is provided by
-    a lock; it deliberately mirrors :class:`ValkeyAllocationStore`'s semantics (minus TTL)."""
+    a lock; it deliberately mirrors :class:`ValkeyAllocationStore`'s semantics."""
 
     def __init__(self, key_prefix: str = "tpv:pool", **_ignored: Any):
         self.key_prefix = key_prefix
@@ -227,7 +226,7 @@ class InMemoryAllocationStore(AllocationStore):
 
 
 # Atomic admit for Valkey/Redis. Mirrors _decide(). KEYS[1] is the ledger key; ARGV is
-# [job_id, rc, rm, rg, kind, bc, bm, bg, max_oversize, reserve, ttl, drop_id...] where a
+# [job_id, rc, rm, rg, kind, bc, bm, bg, max_oversize, reserve, drop_id...] where a
 # budget of -1 means "unlimited" for that dimension.
 _ADMIT_LUA = """
 local key = KEYS[1]
@@ -237,9 +236,8 @@ local kind = ARGV[5]
 local bc, bm, bg = tonumber(ARGV[6]), tonumber(ARGV[7]), tonumber(ARGV[8])
 local max_oversize = tonumber(ARGV[9])
 local reserve = tonumber(ARGV[10])
-local ttl = tonumber(ARGV[11])
 redis.call('HDEL', key, job_id)
-for i = 12, #ARGV do redis.call('HDEL', key, ARGV[i]) end
+for i = 11, #ARGV do redis.call('HDEL', key, ARGV[i]) end
 local flat = redis.call('HGETALL', key)
 local sum_c, sum_m, sum_g, count_oversize = 0, 0, 0, 0
 for i = 1, #flat, 2 do
@@ -262,7 +260,8 @@ end
 if admit then
   redis.call('HSET', key, job_id, rc .. '|' .. rm .. '|' .. rg .. '|' .. kind)
 end
-if ttl > 0 and redis.call('EXISTS', key) == 1 then redis.call('EXPIRE', key, ttl) end
+-- Live jobs may outlast any idle interval; also remove TTLs left by older TPV versions.
+redis.call('PERSIST', key)
 if admit then return 1 else return 0 end
 """
 
@@ -272,17 +271,20 @@ class ValkeyAllocationStore(AllocationStore):
 
     Keys are ``{key_prefix}:{pool}:user:{{user_id}}`` -- the ``{user_id}`` hash tag co-locates
     a user's pool keys on one cluster slot. Each ledger is a hash of
-    ``job_id -> "cores|mem|gpus|kind"`` with a whole-key TTL as the orphan backstop.
+    ``job_id -> "cores|mem|gpus|kind"``. Entries persist until job-state reconciliation
+    confirms completion; an idle ledger can still belong to running jobs.
     """
 
     def __init__(
         self,
         url: str = "valkey://localhost:6379/0",
         key_prefix: str = "tpv:pool",
-        ttl: int = 3600,
+        ttl: int = 0,
         client: Any = None,
         **client_options: Any,
     ):
+        if ttl != 0:
+            raise ValueError("Resource pool ledgers cannot expire while jobs are running; remove ttl or set ttl: 0")
         try:
             import redis
         except ImportError as e:  # pragma: no cover - exercised only without redis installed
@@ -299,7 +301,6 @@ class ValkeyAllocationStore(AllocationStore):
                 url = "rediss://" + url[len("valkeys://") :]
             self.client = redis.from_url(url, decode_responses=True, **client_options)
         self.key_prefix = key_prefix
-        self.ttl = ttl
         self._admit = self.client.register_script(_ADMIT_LUA)
 
     def _key(self, pool: str, user_id: int) -> str:
@@ -340,7 +341,6 @@ class ValkeyAllocationStore(AllocationStore):
             -1 if budget.gpus is None else budget.gpus,
             max_oversize,
             1 if reserve_pool else 0,
-            self.ttl,
             *drop_job_ids,
         ]
         try:

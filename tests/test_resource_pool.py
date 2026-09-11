@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import patch
 
 from galaxy.jobs.mapper import JobMappingException, JobNotReadyException
 
@@ -434,6 +435,32 @@ def _build_valkey_store():
         return ValkeyAllocationStore(client=client)
     except Exception:
         return None
+
+
+class TestLedgerLifetime(unittest.TestCase):
+    def test_idle_ledger_keeps_running_allocation(self):
+        store = _build_valkey_store()
+        self.assertIsNotNone(store)
+        _seed(store, "p", 1, 1, ResourceUsage(32, 0, 0))
+        import time
+
+        with patch("time.time", return_value=time.time() + 7200):
+            self.assertIn(1, store.read("p", 1))
+            self.assertFalse(store.admit(**_op(2, ResourceUsage(1, 0, 0))))
+
+    def test_admission_removes_preexisting_key_expiry(self):
+        store = _build_valkey_store()
+        self.assertIsNotNone(store)
+        _seed(store, "p", 1, 1, ResourceUsage(32, 0, 0))
+        key = store._key("p", 1)
+        store.client.expire(key, 3600)
+        self.assertFalse(store.admit(**_op(2, ResourceUsage(1, 0, 0))))
+        self.assertEqual(store.client.ttl(key), -1)
+
+    def test_expiring_ledgers_are_rejected(self):
+        for ttl in (-1, 3600):
+            with self.subTest(ttl=ttl), self.assertRaisesRegex(ValueError, "cannot expire"):
+                ValkeyAllocationStore(ttl=ttl)
 
 
 def _op(job_id, req, *, kind=NORMAL, budget=Budget(32, 256, 2), max_oversize=0, reserve_pool=False, drop=()):

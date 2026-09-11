@@ -676,7 +676,7 @@ means it must carry none. A pool with no tags therefore governs every job. Becau
 ranking among pools (a job either is or is not governed), ``prefer`` and ``accept`` have no
 meaning on a pool and are rejected when the config is loaded.
 The only thing that lives under ``global`` is the *infrastructure* wiring for the allocation
-store (a backend URL and TTL); the budget *policy* lives on the pool entities. Enforcement is
+store (a backend URL and connection options); the budget *policy* lives on the pool entities. Enforcement is
 automatic: no rule to attach, no helper to call.
 
 .. code-block:: yaml
@@ -688,7 +688,6 @@ automatic: no rule to attach, no helper to call.
      resource_pool_store:
        class: tpv.core.resource_pool.ValkeyAllocationStore
        url: valkey://localhost:6379/0
-       ttl: 3600
 
    pools:
      # No require tags -> governs every job (that a reject tag does not exclude).
@@ -766,3 +765,10 @@ it on the ``tool_type_user_defined`` tag) and trusted tools through one that per
    set ``fail_open: true`` on it to admit jobs during an outage instead ("when unsure, let it
    through"). Leave it off (the default) for UDT/security pools, where letting a user exceed the
    limit is worse than making them wait.
+
+.. note::
+   Allocation ledgers do not expire: jobs can remain queued or running for longer than any
+   idle timeout. Entries are removed when reconciliation observes completion. Nonzero ``ttl``
+   settings are rejected. Configure Valkey persistence and disable key eviction so a restart
+   or memory pressure does not discard live allocations. Completed entries for inactive
+   users remain until their next admission attempt reconciles them.
