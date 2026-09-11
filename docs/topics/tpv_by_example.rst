@@ -718,8 +718,13 @@ resolved by the ordinary ``inherit`` + ``combine`` precedence and overrides the 
      trillian@vortex.org:
        max_concurrent_gpus: 4       # this user overrides the gpu pool budget
 
+Pools support ``inherits:`` for reusable policy. Mark templates ``abstract: true`` so only
+concrete pools enforce budgets. Children inherit omitted ``oversize`` fields and ``fail_open``;
+explicit values override the parent, including ``max_concurrent: 0``, ``fail_open: false``,
+and ``hard_max_cores: null`` to remove an inherited ceiling.
+
 Allowing oversize jobs
-~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^
 Some trusted (non-UDT) tools legitimately need more than the whole pool budget. A pool may
 permit such *oversize* jobs up to a small concurrency limit instead of rejecting them:
 
@@ -732,7 +737,7 @@ permit such *oversize* jobs up to a small concurrency limit instead of rejecting
        max_concurrent_cores: 32
        oversize:
          max_concurrent: 1        # at most one over-budget job at a time per user
-         hard_max_cores: 128      # but never more than this — always fail beyond it
+         hard_max_cores: 128      # maximum cores requested by one oversize job
      udt:
        scheduling:
          require:
@@ -745,6 +750,13 @@ A job whose request fits the budget is admitted normally. A job that exceeds the
 deferred otherwise, and failed outright when ``max_concurrent`` is ``0`` or the request
 exceeds a ``hard_max_*`` ceiling. Route UDTs through a pool without an oversize allowance (gate
 it on the ``tool_type_user_defined`` tag) and trusted tools through one that permits it.
+
+``oversize.max_concurrent`` counts oversize jobs, while ``oversize.hard_max_*`` limits each
+oversize job's request. These are not aggregate hard limits. Normal jobs share the
+``max_concurrent_*`` budget, and oversize jobs are counted separately: the example permits
+32 cores of normal jobs plus one 128-core oversize job, totalling 160 cores. Set
+``oversize.reserve_pool: true`` to prevent normal and oversize resource usage from sharing
+the pool; ``oversize.max_concurrent`` still limits the number of oversize jobs.
 
 .. note::
    **What a pool counts.** A pool counts the resources a job *asks for*, measured before a
@@ -772,3 +784,12 @@ it on the ``tool_type_user_defined`` tag) and trusted tools through one that per
    settings are rejected. Configure Valkey persistence and disable key eviction so a restart
    or memory pressure does not discard live allocations. Completed entries for inactive
    users remain until their next admission attempt reconciles them.
+
+.. note::
+   **Galaxy's ready window.** Galaxy selects a bounded number of the oldest ready ``new``
+   jobs per user and handler before calling TPV. A backlog of jobs deferred by one pool can
+   therefore hide later jobs that would fit another pool. Increasing ``ready_window_size``
+   can mitigate a finite backlog, but does not solve starvation for an arbitrary backlog.
+   A general solution requires Galaxy's ready-job selection to account for these deferrals;
+   resource pools do not change that query. See the `Galaxy Australia issue
+   <https://github.com/usegalaxy-au/infrastructure/issues/2254>`_.

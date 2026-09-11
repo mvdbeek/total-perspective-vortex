@@ -44,7 +44,7 @@ test = [
   "pytest",
   "responses",
   # Lets the resource-pool store contract test run the real Valkey adapter (Lua script)
-  # without a live server; the test skips gracefully if this is absent.
+  # without a live server. This is required: the production Lua path must be tested.
   "fakeredis[lua]",
   "tox>=2.9.1",
   "coverage>=4.4.1",

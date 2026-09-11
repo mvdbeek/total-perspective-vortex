@@ -593,7 +593,7 @@ def _build_valkey_store():
     """A ValkeyAllocationStore backed by fakeredis, or None when fakeredis+Lua is unavailable.
 
     Lets the parity test run the *real* Valkey adapter (Lua admit script, ``|`` serialisation,
-    URL handling) without a live server, falling back to skip when the dependency is absent.
+    URL handling) without a live server. The contract test fails if the dependency is absent.
     """
     try:
         import fakeredis

@@ -7,7 +7,9 @@ Unreleased
   ``inherit``/``combine`` precedence; enforcement is an automatic step of the mapping pipeline.
   Allocations are tracked in a pluggable, Valkey-backed store (no data is written to Galaxy's
   database), wired under ``global.resource_pool_store``. Enforcement is fail-closed, with an
-  optional per-pool ``fail_open``. See the "Per-user resource pools" docs section.
+  optional per-pool ``fail_open``. Pool allocations persist until job-state reconciliation
+  releases them, and matching pools admit a job atomically after destination evaluation.
+  See the "Per-user resource pools" docs section, including Galaxy ready-window limitations.
 
 3.2.1 - Apr 13, 2026. (sha c5c317f8613ca66446af38eba4e865c20d62ac45)
 --------------------------------------------------------------------

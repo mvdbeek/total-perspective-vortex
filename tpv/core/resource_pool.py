@@ -14,8 +14,8 @@ TPV never needs a job-completion callback.
 
 The load-bearing operation is :meth:`AllocationStore.admit_many`, a single atomic
 check-and-record: it drops finished jobs, sums the remaining committed usage and, if the
-incoming job fits every matching pool budget (or oversize allowance), records it in all pools. Because it is atomic,
-two concurrent maps for the same user cannot both squeak past the budget.
+incoming job fits every matching pool budget (or oversize allowance), records it in all pools.
+Because it is atomic, two concurrent maps for the same user cannot both exceed the budget.
 """
 
 from __future__ import annotations
@@ -84,16 +84,17 @@ class Budget(NamedTuple):
 class OversizePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # How many over-budget jobs a user may run concurrently in this pool. 0 (the default)
-    # means over-budget jobs are rejected outright -- the correct setting for UDT pools.
-    max_concurrent: int = 0
-    # Optional absolute ceiling; a job requesting more than this always fails, even within
-    # the oversize allowance.
-    hard_max_cores: float | None = None
-    hard_max_mem: float | None = None
-    hard_max_gpus: float | None = None
-    # When true, a pool holds either normal jobs or a single oversize job, never both.
-    reserve_pool: bool = False
+    max_concurrent: int = Field(
+        default=0,
+        description="Maximum concurrent oversize jobs per user in this pool; 0 rejects oversize requests.",
+    )
+    hard_max_cores: float | None = Field(default=None, description="Maximum cores requested by one oversize job.")
+    hard_max_mem: float | None = Field(default=None, description="Maximum memory in GB requested by one oversize job.")
+    hard_max_gpus: float | None = Field(default=None, description="Maximum GPUs requested by one oversize job.")
+    reserve_pool: bool = Field(
+        default=False,
+        description="Prevent normal and oversize resource usage from coexisting in this pool; max_concurrent still applies.",
+    )
 
 
 class StoreConfig(BaseModel):
