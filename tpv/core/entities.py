@@ -731,14 +731,14 @@ class PoolEntity(EntityWithRules):
 
     A pool caps the aggregate ``max_concurrent_cores/mem/gpus`` a single user may hold across
     their concurrently active jobs. It reuses the entity machinery for ``inherits:`` between
-    pools and scheduling tags (which job(s) a pool governs, matched like a Destination). Note
+    pools and scheduling tags (which jobs a pool governs). Note
     that pool ``rules`` are not evaluated during admission -- budgets are resolved from the
     ``max_concurrent_*`` fields via ``combine`` precedence, not from rule expressions.
 
     ``merge_order`` sits below Tool/Role/User so a User/Role that sets ``max_concurrent_*``
     overrides the pool default through the ordinary combine precedence -- combine *is* the
-    budget provider, no bespoke provider needed. Selecting which pools govern a job is the same
-    tag match a Destination uses (``entity.tpv_tags.match(pool.tpv_dest_tags)``).
+    budget provider, no bespoke provider needed. Pool require/reject tags select jobs;
+    the job's required routing tags do not need to be supported by the pool.
     """
 
     merge_order: ClassVar[int] = 1
@@ -777,19 +777,13 @@ class PoolEntity(EntityWithRules):
         return self
 
     def matches(self, entity: Entity) -> bool:
-        """Whether this pool governs ``entity``.
-
-        Same vocabulary as a destination, but a pool never places demands back on the job. The
-        model to hold is *a destination that accepts every tag*: the job's own require/reject are
-        always satisfied, so only this pool's ``require`` (job must carry all) and ``reject`` (job
-        must carry none) decide. Using ``Destination``'s symmetric match here would exempt any job
-        carrying a ``require`` tag -- the norm for routing -- from an untagged pool, silently
-        bypassing enforcement.
-        """
-        job_tags = set(entity.tpv_tags.all_tag_values())
-        return set(self.tpv_dest_tags.require or []) <= job_tags and not (
-            set(self.tpv_dest_tags.reject or []) & job_tags
+        """Select jobs by positive tags, independently of destination requirements."""
+        job_tags = (
+            set(entity.tpv_tags.require or []) | set(entity.tpv_tags.prefer or []) | set(entity.tpv_tags.accept or [])
         )
+        return set(self.tpv_dest_tags.require or []).issubset(job_tags) and not set(
+            self.tpv_dest_tags.reject or []
+        ).intersection(job_tags)
 
     def budget_for(self, entity: Entity) -> Budget:
         """Resolve the effective budget for ``entity``: a per-dimension value it carries (from a

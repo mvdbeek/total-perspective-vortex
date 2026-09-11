@@ -6,7 +6,7 @@ global:
     class: tpv.core.resource_pool.InMemoryAllocationStore
 
 # First-class resource pools, alongside tools/users/roles/destinations. A pool governs a job when
-# the job's tags satisfy the pool's require/reject tags (one-directional, unlike destinations).
+# its positive job tags satisfy the pool's require/reject selectors.
 pools:
   # Governs every non-UDT job (no require tags; rejects the udt tag so UDT jobs are handled solely
   # by the dedicated udt pool). Trusted big tools may exceed the budget up to one oversize job.

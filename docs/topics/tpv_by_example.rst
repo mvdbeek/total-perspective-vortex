@@ -667,14 +667,12 @@ applies to any tool.
 
 Pools are a **first-class TPV entity**, declared in a top-level ``pools:`` collection alongside
 ``tools:``, ``users:``, ``roles:`` and ``destinations:``. A pool governs a job when the job's
-tags satisfy the pool's ``scheduling`` tags. These are the same ``require``/``reject`` tags you
-already use on destinations, with one difference to hold in mind: **a pool behaves like a
-destination that accepts every tag.** A job's own ``require`` tags describe what it needs from a
-destination and are always considered satisfied by a pool, so they never exempt the job. Only
-the pool's side decides -- ``require`` means the job must carry all of those tags, ``reject``
-means it must carry none. A pool with no tags therefore governs every job. Because there is no
-ranking among pools (a job either is or is not governed), ``prefer`` and ``accept`` have no
-meaning on a pool and are rejected when the config is loaded.
+positive scheduling tags (``require``, ``prefer``, or ``accept``) contain all the pool's
+``require`` tags and none of its ``reject`` tags. A job's unrelated routing requirements do
+not exclude it from a pool; an untagged pool governs every job. Tags that the job rejects do
+not describe its requested capabilities and do not participate in pool selection. Because
+there is no ranking among pools, ``prefer`` and ``accept`` have no meaning on a pool and are
+rejected when the config is loaded.
 The only thing that lives under ``global`` is the *infrastructure* wiring for the allocation
 store (a backend URL and connection options); the budget *policy* lives on the pool entities. Enforcement is
 automatic: no rule to attach, no helper to call.

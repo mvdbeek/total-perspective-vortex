@@ -5,6 +5,7 @@ from unittest.mock import patch
 from galaxy.jobs.mapper import JobMappingException, JobNotReadyException
 
 from tpv.commands.test import mock_galaxy
+from tpv.core.entities import PoolEntity, SchedulingTags, Tool
 from tpv.core.loader import TPVConfigLoader
 from tpv.core.mapper import EntityToDestinationMapper
 from tpv.core.resource_pool import (
@@ -206,6 +207,21 @@ class TestTerminalJobIds(unittest.TestCase):
         )
 
 
+class TestPoolMembership(unittest.TestCase):
+    def test_untagged_pool_covers_required_routing_tags(self):
+        pool = PoolEntity()
+        self.assertTrue(pool.matches(Tool(scheduling={"require": ["gpu", "pulsar"]})))
+
+    def test_pool_selects_positive_job_tags_only(self):
+        pool = PoolEntity(scheduling={"require": ["gpu"], "reject": ["udt"]})
+        for tag_type in ("require", "prefer", "accept"):
+            with self.subTest(tag_type=tag_type):
+                self.assertTrue(pool.matches(Tool(scheduling={tag_type: ["gpu"], "reject": ["udt"]})))
+                self.assertFalse(pool.matches(Tool(scheduling={tag_type: ["gpu", "udt"]})))
+        self.assertFalse(pool.matches(Tool(scheduling={"reject": ["gpu"]})))
+        self.assertFalse(pool.matches(Tool()))
+
+
 class TestResourcePoolMapping(unittest.TestCase):
     def _mapper(self):
         return EntityToDestinationMapper(TPVConfigLoader.from_url_or_path(FIXTURE))
@@ -226,6 +242,15 @@ class TestResourcePoolMapping(unittest.TestCase):
         self.assertEqual(dest.id, "local")
         # The job was recorded against the pool.
         self.assertIn(1, mapper.resource_pools.store.read("default", 1))
+
+    def test_required_routing_tag_does_not_bypass_default_budget(self):
+        mapper = self._mapper()
+        mapper.config.tools["default"].tpv_tags = SchedulingTags(require=["gpu"])
+        mapper.destinations["local"].tpv_dest_tags = SchedulingTags(accept=["gpu"])
+        user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
+        _seed(mapper.resource_pools.store, "default", user.id, 900, ResourceUsage(32, 0, 0))
+        with self.assertRaises(JobNotReadyException):
+            mapper.map_to_destination(self._app(), mock_galaxy.Tool("default"), user, self._job(1))
 
     def test_over_budget_defers(self):
         mapper = self._mapper()
