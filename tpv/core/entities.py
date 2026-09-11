@@ -754,8 +754,9 @@ class PoolEntity(EntityWithRules):
 
     def override(self, entity: Self) -> Self:
         new_entity = super().override(entity)
-        self.override_single_property(new_entity, self, entity, "oversize")
-        self.override_single_property(new_entity, self, entity, "fail_open")
+        # Defaults are not overrides: inherit omitted policy fields, including ceilings.
+        new_entity.oversize = entity.oversize.model_copy(update=self.oversize.model_dump(exclude_unset=True))
+        new_entity.fail_open = self.fail_open if "fail_open" in self.model_fields_set else entity.fail_open
         return new_entity
 
     def inherit(self, entity: Self) -> Self:

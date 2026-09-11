@@ -207,6 +207,62 @@ class TestTerminalJobIds(unittest.TestCase):
         )
 
 
+class TestPoolInheritance(unittest.TestCase):
+    def test_omitted_and_partial_policy_inherit_across_multiple_levels(self):
+        pools = TPVConfigLoader(
+            {
+                "pools": {
+                    "parent": {
+                        "fail_open": True,
+                        "max_concurrent_cores": 32,
+                        "oversize": {"max_concurrent": 1, "hard_max_cores": 128, "reserve_pool": True},
+                    },
+                    "child": {"inherits": "parent"},
+                    "grandchild": {"inherits": "child", "oversize": {"max_concurrent": 2}},
+                }
+            }
+        ).config.pools
+        self.assertEqual(pools["child"].oversize, pools["parent"].oversize)
+        self.assertTrue(pools["child"].fail_open)
+        self.assertEqual(pools["grandchild"].oversize.max_concurrent, 2)
+        self.assertEqual(pools["grandchild"].oversize.hard_max_cores, 128)
+        self.assertTrue(pools["grandchild"].oversize.reserve_pool)
+        self.assertEqual(pools["grandchild"].max_concurrent_cores, 32)
+        self.assertEqual(pools["parent"].oversize.max_concurrent, 1)
+
+    def test_explicit_false_zero_and_null_override_parent_policy(self):
+        pools = TPVConfigLoader(
+            {
+                "pools": {
+                    "parent": {
+                        "fail_open": True,
+                        "oversize": {"max_concurrent": 1, "hard_max_cores": 128, "reserve_pool": True},
+                    },
+                    "child": {
+                        "inherits": "parent",
+                        "fail_open": False,
+                        "oversize": {"max_concurrent": 0, "hard_max_cores": None, "reserve_pool": False},
+                    },
+                }
+            }
+        ).config.pools
+        self.assertFalse(pools["child"].fail_open)
+        self.assertEqual(pools["child"].oversize.max_concurrent, 0)
+        self.assertIsNone(pools["child"].oversize.hard_max_cores)
+        self.assertFalse(pools["child"].oversize.reserve_pool)
+
+    def test_overlay_config_preserves_unspecified_policy(self):
+        parent = TPVConfigLoader(
+            {"pools": {"p": {"fail_open": True, "oversize": {"max_concurrent": 1, "hard_max_mem": 512}}}}
+        )
+        child = TPVConfigLoader({"pools": {"p": {"oversize": {"hard_max_cores": 128}}}}, parent=parent)
+        pool = child.config.pools["p"]
+        self.assertTrue(pool.fail_open)
+        self.assertEqual(pool.oversize.max_concurrent, 1)
+        self.assertEqual(pool.oversize.hard_max_mem, 512)
+        self.assertEqual(pool.oversize.hard_max_cores, 128)
+
+
 class TestPoolMembership(unittest.TestCase):
     def test_untagged_pool_covers_required_routing_tags(self):
         pool = PoolEntity()
