@@ -749,9 +749,11 @@ it on the ``tool_type_user_defined`` tag) and trusted tools through one that per
 .. note::
    **What a pool counts.** A pool counts the resources a job *asks for*, measured before a
    destination gets to shrink them — so a destination that caps cores does not reduce what the
-   pool charges the user. The check runs once a suitable destination is known to exist (a job
-   with nowhere to run is never counted) but before the destination is finalised, so the count
-   does not depend on which destination is chosen.
+   pool charges the user. The request is captured before destination evaluation; allocations
+   are committed only after a destination has successfully evaluated. All matching pools admit
+   the job atomically, so a rejected or deferred mapping does not leave partial reservations.
+   Accounting begins when TPV returns a destination; Galaxy may still defer dispatch afterwards
+   for its own concurrency limits or quota checks.
 
 .. note::
    Enforcement is **fail-closed**: if the allocation store cannot be reached, TPV cannot check

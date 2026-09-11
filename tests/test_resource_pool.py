@@ -1,11 +1,13 @@
 import os
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import patch
 
 from galaxy.jobs.mapper import JobMappingException, JobNotReadyException
 
 from tpv.commands.test import mock_galaxy
-from tpv.core.entities import PoolEntity, SchedulingTags, Tool
+from tpv.core.entities import PoolEntity, Rule, SchedulingTags, Tool
 from tpv.core.loader import TPVConfigLoader
 from tpv.core.mapper import EntityToDestinationMapper
 from tpv.core.resource_pool import (
@@ -14,6 +16,7 @@ from tpv.core.resource_pool import (
     AllocationStore,
     Budget,
     InMemoryAllocationStore,
+    PoolAdmission,
     ResourceUsage,
     StoreUnavailable,
     ValkeyAllocationStore,
@@ -446,6 +449,52 @@ class TestResourcePoolMapping(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"scheduling.{kind}"):
                     PoolEntity.model_validate({"scheduling": {kind: ["gpu"]}})
 
+    def test_gpu_deferrals_leave_cpu_budget_available(self):
+        mapper = self._mapper()
+        app = self._app()
+        user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
+        _seed(mapper.resource_pools.store, "gpu", user.id, 900, ResourceUsage(0, 0, 2))
+        for jid in range(1, 9):
+            with self.assertRaises(JobNotReadyException):
+                mapper.map_to_destination(app, mock_galaxy.Tool("gpu_tool"), user, self._job(jid))
+        self.assertEqual(mapper.resource_pools.store.read("default", user.id), {})
+        dest = mapper.map_to_destination(app, mock_galaxy.Tool("default"), user, self._job(10))
+        self.assertEqual(dest.id, "local")
+
+    def test_permanent_rejection_leaves_no_partial_allocations(self):
+        mapper = self._mapper()
+        mapper.pools["z_last"] = PoolEntity(max_concurrent_cores=1)
+        user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
+        with self.assertRaisesRegex(JobMappingException, "can never be scheduled"):
+            mapper.map_to_destination(self._app(), mock_galaxy.Tool("default"), user, self._job(1))
+        self.assertEqual(mapper.resource_pools.store.read("default", user.id), {})
+
+    def test_destination_rejection_leaves_no_allocations(self):
+        for exception in ("TryNextDestinationOrWait", "TryNextDestinationOrFail"):
+            with self.subTest(exception=exception):
+                mapper = self._mapper()
+                mapper.destinations["local"].rules = {
+                    "reject": Rule(
+                        **{
+                            "if": True,
+                            "execute": f"from tpv.core.entities import {exception}\nraise {exception}()\nNone",
+                            "evaluator": mapper.loader,
+                        }
+                    )
+                }
+                user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
+                with self.assertRaises((JobNotReadyException, JobMappingException)):
+                    mapper.map_to_destination(self._app(), mock_galaxy.Tool("default"), user, self._job(1))
+                self.assertEqual(mapper.resource_pools.store.read("default", user.id), {})
+
+    def test_destination_clamping_does_not_change_billed_request(self):
+        mapper = self._mapper()
+        mapper.destinations["local"].max_cores = 1
+        user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
+        dest = mapper.map_to_destination(self._app(), mock_galaxy.Tool("default"), user, self._job(1))
+        self.assertEqual(dest.params["native_spec"], "--cores 1 --mem 2")
+        self.assertEqual(mapper.resource_pools.store.read("default", user.id)[1][0], ResourceUsage(4, 8, 0))
+
     def test_user_budget_override_wins_over_pool_default(self):
         # trillian's user entity raises max_concurrent_cores to 128; combine resolves it over the
         # default pool's 32, so two 64-core bigtool jobs are admitted as *normal* (not oversize).
@@ -464,7 +513,7 @@ class _RaisingStore(AllocationStore):
     def read(self, pool, user_id):
         raise StoreUnavailable("backend down")
 
-    def admit(self, *args, **kwargs):
+    def admit_many(self, *args, **kwargs):
         raise StoreUnavailable("backend down")
 
 
@@ -499,6 +548,22 @@ class TestResourcePoolBranches(unittest.TestCase):
         user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
         dest = mapper.map_to_destination(self._app(), mock_galaxy.Tool("default"), user, self._job(41))
         self.assertEqual(dest.id, "local")
+
+    def test_batch_write_failure_requires_every_pool_to_fail_open(self):
+        for strict in (True, False):
+            with self.subTest(strict=strict):
+                mapper = self._mapper()
+                mapper.pools["default"].fail_open = True
+                mapper.pools["gpu"].fail_open = not strict
+                user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
+                with patch.object(mapper.resource_pools.store, "admit_many", side_effect=StoreUnavailable("down")):
+                    if strict:
+                        with self.assertRaises(JobNotReadyException):
+                            mapper.map_to_destination(self._app(), mock_galaxy.Tool("gpu_tool"), user, self._job(1))
+                    else:
+                        dest = mapper.map_to_destination(self._app(), mock_galaxy.Tool("gpu_tool"), user, self._job(1))
+                        self.assertEqual(dest.id, "local")
+                self.assertEqual(mapper.resource_pools.store.read("default", user.id), {})
 
     def test_anonymous_user_is_not_governed(self):
         mapper = self._mapper()
@@ -606,6 +671,65 @@ PARITY_SCENARIOS = {
     ],
     "drop_releases": [_op(1, ResourceUsage(30, 0, 0)), _op(2, ResourceUsage(8, 0, 0), drop=(1,))],
 }
+
+
+def _admission(pool, cores=4, *, drop=()):
+    return PoolAdmission(pool, ResourceUsage(cores, 0, 0), NORMAL, Budget(4, None, None), 0, False, set(drop))
+
+
+class TestAtomicPoolAdmission(unittest.TestCase):
+    def test_rejection_in_either_pool_is_atomic(self):
+        for build in (InMemoryAllocationStore, _build_valkey_store):
+            for full_pool in ("a", "b"):
+                with self.subTest(store=build.__name__, full_pool=full_pool):
+                    store = build()
+                    _seed(store, full_pool, 1, 99, ResourceUsage(4, 0, 0))
+                    self.assertFalse(store.admit_many(1, 1, [_admission("a"), _admission("b")]))
+                    for pool in ("a", "b"):
+                        self.assertNotIn(1, store.read(pool, 1))
+                    self.assertIn(99, store.read(full_pool, 1))
+
+    def test_rejected_retry_clears_old_entries_in_all_pools(self):
+        for build in (InMemoryAllocationStore, _build_valkey_store):
+            with self.subTest(store=build.__name__):
+                store = build()
+                for pool in ("a", "b"):
+                    _seed(store, pool, 1, 1, ResourceUsage(1, 0, 0))
+                _seed(store, "a", 1, 99, ResourceUsage(4, 0, 0))
+                self.assertFalse(store.admit_many(1, 1, [_admission("a"), _admission("b")]))
+                self.assertEqual(set(store.read("a", 1)), {99})
+                self.assertEqual(store.read("b", 1), {})
+                self.assertTrue(store.admit_many(1, 1, [_admission("a", drop={99}), _admission("b")]))
+                self.assertTrue(store.admit_many(1, 1, [_admission("a"), _admission("b")]))
+                for pool in ("a", "b"):
+                    self.assertEqual(store.read(pool, 1), {1: (ResourceUsage(4, 0, 0), NORMAL)})
+
+    def test_concurrent_jobs_cannot_oversubscribe_or_split_pools(self):
+        for build in (InMemoryAllocationStore, _build_valkey_store):
+            with self.subTest(store=build.__name__):
+                store = build()
+                # Warm up Lua loading before the racing admission calls.
+                _seed(store, "warmup", 1, 99, ResourceUsage())
+                barrier = Barrier(8)
+
+                def admit(jid):
+                    barrier.wait(timeout=10)
+                    return store.admit_many(1, jid, [_admission("a"), _admission("b")])
+
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    results = list(executor.map(admit, range(1, 9)))
+                self.assertEqual(sum(results), 1)
+                self.assertEqual(store.read("a", 1), store.read("b", 1))
+                self.assertEqual(len(store.read("a", 1)), 1)
+
+    def test_reconciliation_preserves_large_job_ids(self):
+        for build in (InMemoryAllocationStore, _build_valkey_store):
+            with self.subTest(store=build.__name__):
+                store = build()
+                job_id = 2**53 + 1
+                _seed(store, "a", 1, job_id, ResourceUsage(4, 0, 0))
+                self.assertTrue(store.admit_many(1, 1, [_admission("a", drop={job_id}), _admission("b")]))
+                self.assertNotIn(job_id, store.read("a", 1))
 
 
 class TestStoreParity(unittest.TestCase):

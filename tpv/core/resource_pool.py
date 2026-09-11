@@ -12,15 +12,16 @@ the jobs TPV has admitted to the pool. Galaxy's job table is consulted read-only
 which ledgered jobs have reached a terminal state so their allocation can be released --
 TPV never needs a job-completion callback.
 
-The load-bearing operation is :meth:`AllocationStore.admit`, a single atomic
+The load-bearing operation is :meth:`AllocationStore.admit_many`, a single atomic
 check-and-record: it drops finished jobs, sums the remaining committed usage and, if the
-incoming job fits the budget (or the oversize allowance), records it. Because it is atomic,
+incoming job fits every matching pool budget (or oversize allowance), records it in all pools. Because it is atomic,
 two concurrent maps for the same user cannot both squeak past the budget.
 """
 
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import threading
 from abc import ABC, abstractmethod
@@ -158,6 +159,16 @@ def _decide(
     return fits
 
 
+class PoolAdmission(NamedTuple):
+    pool: str
+    req: ResourceUsage
+    kind: str
+    budget: Budget
+    max_oversize: int
+    reserve_pool: bool
+    drop_job_ids: set[int]
+
+
 class AllocationStore(ABC):
     """Holds, per ``(pool, user)``, the ledger of admitted ``{job_id: allocation}``."""
 
@@ -166,6 +177,14 @@ class AllocationStore(ABC):
         """Return the current ledger as ``{job_id: (allocation, kind)}``."""
 
     @abstractmethod
+    def admit_many(self, user_id: int, job_id: int, admissions: list[PoolAdmission]) -> bool:
+        """Atomically reconcile and admit a job to every requested pool, or none.
+
+        Drop terminal IDs and the job's own previous entry from every requested pool first.
+        On rejection those drops remain, but no new allocation is recorded in any pool.
+        Each pool must appear at most once; all pools must belong to the same user.
+        """
+
     def admit(
         self,
         pool: str,
@@ -179,14 +198,19 @@ class AllocationStore(ABC):
         reserve_pool: bool,
         drop_job_ids: set[int],
     ) -> bool:
-        """Atomically drop ``drop_job_ids`` (and ``job_id``'s own stale entry), then admit
-        ``job_id`` iff it fits. Returns True (admitted, entry recorded) or False (deferred,
-        ledger otherwise left as-is apart from the drops)."""
+        """Admit to a single pool with the same atomic semantics as ``admit_many``."""
+        return self.admit_many(
+            user_id,
+            job_id,
+            [PoolAdmission(pool, req, kind, budget, max_oversize, reserve_pool, drop_job_ids)],
+        )
 
 
 class InMemoryAllocationStore(AllocationStore):
-    """Process-local store for tests and single-process deployments. Atomicity is provided by
-    a lock; it deliberately mirrors :class:`ValkeyAllocationStore`'s semantics."""
+    """Process-local store for tests and single-process deployments.
+
+    A lock covers all of a job's pools, mirroring the Valkey script's atomic admission.
+    """
 
     def __init__(self, key_prefix: str = "tpv:pool", **_ignored: Any):
         self.key_prefix = key_prefix
@@ -200,69 +224,62 @@ class InMemoryAllocationStore(AllocationStore):
         with self._lock:
             return dict(self._data.get(self._key(pool, user_id), {}))
 
-    def admit(
-        self,
-        pool: str,
-        user_id: int,
-        job_id: int,
-        req: ResourceUsage,
-        *,
-        kind: str,
-        budget: Budget,
-        max_oversize: int,
-        reserve_pool: bool,
-        drop_job_ids: set[int],
-    ) -> bool:
-        key = self._key(pool, user_id)
+    def admit_many(self, user_id: int, job_id: int, admissions: list[PoolAdmission]) -> bool:
         with self._lock:
-            ledger = self._data.setdefault(key, {})
-            for jid in drop_job_ids:
-                ledger.pop(jid, None)
-            ledger.pop(job_id, None)
-            if _decide(ledger, req, kind, budget, max_oversize, reserve_pool):
-                ledger[job_id] = (req, kind)
-                return True
-            return False
+            ledgers = [self._data.setdefault(self._key(a.pool, user_id), {}) for a in admissions]
+            for admission, ledger in zip(admissions, ledgers):
+                for jid in admission.drop_job_ids | {job_id}:
+                    ledger.pop(jid, None)
+            if not all(
+                _decide(ledger, a.req, a.kind, a.budget, a.max_oversize, a.reserve_pool)
+                for a, ledger in zip(admissions, ledgers)
+            ):
+                return False
+            for admission, ledger in zip(admissions, ledgers):
+                ledger[job_id] = (admission.req, admission.kind)
+            return True
 
 
-# Atomic admit for Valkey/Redis. Mirrors _decide(). KEYS[1] is the ledger key; ARGV is
-# [job_id, rc, rm, rg, kind, bc, bm, bg, max_oversize, reserve, drop_id...] where a
-# budget of -1 means "unlimited" for that dimension.
+# All keys use the same user hash tag, so this transaction also fits one Redis Cluster slot.
+# ARGV[1] is the job ID; ARGV[2] is a JSON array of policies in KEYS order. Budgets use -1
+# for unlimited dimensions. Job IDs inside the JSON remain strings to avoid Lua precision loss.
 _ADMIT_LUA = """
-local key = KEYS[1]
 local job_id = ARGV[1]
-local rc, rm, rg = tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4])
-local kind = ARGV[5]
-local bc, bm, bg = tonumber(ARGV[6]), tonumber(ARGV[7]), tonumber(ARGV[8])
-local max_oversize = tonumber(ARGV[9])
-local reserve = tonumber(ARGV[10])
-redis.call('HDEL', key, job_id)
-for i = 11, #ARGV do redis.call('HDEL', key, ARGV[i]) end
-local flat = redis.call('HGETALL', key)
-local sum_c, sum_m, sum_g, count_oversize = 0, 0, 0, 0
-for i = 1, #flat, 2 do
-  local c, m, g, k = string.match(flat[i + 1], '([^|]*)|([^|]*)|([^|]*)|([^|]*)')
-  if k == 'oversize' then
-    count_oversize = count_oversize + 1
+local admissions = cjson.decode(ARGV[2])
+for i, key in ipairs(KEYS) do
+  redis.call('HDEL', key, job_id)
+  for _, jid in ipairs(admissions[i].drop_job_ids) do redis.call('HDEL', key, jid) end
+  -- Live jobs may outlast any idle interval; remove TTLs left by older TPV versions.
+  redis.call('PERSIST', key)
+end
+for i, key in ipairs(KEYS) do
+  local a = admissions[i]
+  local flat = redis.call('HGETALL', key)
+  local sum_c, sum_m, sum_g, count_oversize = 0, 0, 0, 0
+  for j = 1, #flat, 2 do
+    local c, m, g, kind = string.match(flat[j + 1], '([^|]*)|([^|]*)|([^|]*)|([^|]*)')
+    if kind == 'oversize' then
+      count_oversize = count_oversize + 1
+    else
+      sum_c = sum_c + tonumber(c); sum_m = sum_m + tonumber(m); sum_g = sum_g + tonumber(g)
+    end
+  end
+  if a.kind == 'oversize' then
+    if count_oversize >= a.max_oversize then return 0 end
+    if a.reserve_pool and (sum_c ~= 0 or sum_m ~= 0 or sum_g ~= 0) then return 0 end
   else
-    sum_c = sum_c + tonumber(c); sum_m = sum_m + tonumber(m); sum_g = sum_g + tonumber(g)
+    local fits = (a.bc < 0 or sum_c + a.rc <= a.bc)
+      and (a.bm < 0 or sum_m + a.rm <= a.bm)
+      and (a.bg < 0 or sum_g + a.rg <= a.bg)
+    if not fits or (a.reserve_pool and count_oversize > 0) then return 0 end
   end
 end
-local admit = false
-if kind == 'oversize' then
-  if count_oversize < max_oversize and (reserve == 0 or (sum_c == 0 and sum_m == 0 and sum_g == 0)) then
-    admit = true
-  end
-else
-  local fits = (bc < 0 or sum_c + rc <= bc) and (bm < 0 or sum_m + rm <= bm) and (bg < 0 or sum_g + rg <= bg)
-  if fits and (reserve == 0 or count_oversize == 0) then admit = true end
+-- Only write allocations after every pool has accepted the job.
+for i, key in ipairs(KEYS) do
+  local a = admissions[i]
+  redis.call('HSET', key, job_id, a.rc .. '|' .. a.rm .. '|' .. a.rg .. '|' .. a.kind)
 end
-if admit then
-  redis.call('HSET', key, job_id, rc .. '|' .. rm .. '|' .. rg .. '|' .. kind)
-end
--- Live jobs may outlast any idle interval; also remove TTLs left by older TPV versions.
-redis.call('PERSIST', key)
-if admit then return 1 else return 0 end
+return 1
 """
 
 
@@ -317,34 +334,31 @@ class ValkeyAllocationStore(AllocationStore):
             ledger[int(jid)] = (ResourceUsage(float(c), float(m), float(g)), kind)
         return ledger
 
-    def admit(
-        self,
-        pool: str,
-        user_id: int,
-        job_id: int,
-        req: ResourceUsage,
-        *,
-        kind: str,
-        budget: Budget,
-        max_oversize: int,
-        reserve_pool: bool,
-        drop_job_ids: set[int],
-    ) -> bool:
-        args = [
-            job_id,
-            req.cores,
-            req.mem,
-            req.gpus,
-            kind,
-            -1 if budget.cores is None else budget.cores,
-            -1 if budget.mem is None else budget.mem,
-            -1 if budget.gpus is None else budget.gpus,
-            max_oversize,
-            1 if reserve_pool else 0,
-            *drop_job_ids,
+    def admit_many(self, user_id: int, job_id: int, admissions: list[PoolAdmission]) -> bool:
+        if not admissions:
+            return True
+        policies = [
+            {
+                "rc": a.req.cores,
+                "rm": a.req.mem,
+                "rg": a.req.gpus,
+                "kind": a.kind,
+                "bc": -1 if a.budget.cores is None else a.budget.cores,
+                "bm": -1 if a.budget.mem is None else a.budget.mem,
+                "bg": -1 if a.budget.gpus is None else a.budget.gpus,
+                "max_oversize": a.max_oversize,
+                "reserve_pool": a.reserve_pool,
+                "drop_job_ids": [str(jid) for jid in a.drop_job_ids],
+            }
+            for a in admissions
         ]
         try:
-            return bool(self._admit(keys=[self._key(pool, user_id)], args=args))
+            return bool(
+                self._admit(
+                    keys=[self._key(a.pool, user_id) for a in admissions],
+                    args=[job_id, json.dumps(policies)],
+                )
+            )
         except self._redis_mod.exceptions.RedisError as e:
             raise StoreUnavailable(str(e)) from e
 

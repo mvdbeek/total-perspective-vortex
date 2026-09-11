@@ -31,6 +31,7 @@ from .resource_pool import (
     NORMAL,
     OVERSIZE,
     Budget,
+    PoolAdmission,
     ResourcePoolManager,
     ResourceUsage,
     StoreUnavailable,
@@ -392,19 +393,9 @@ class EntityToDestinationMapper(object):
         The budget is the user's/role's ``max_concurrent_*`` if they set one, otherwise the
         pool's default. Anonymous (logged-out) jobs are not subject to per-user pools.
 
-        A note on two deliberate choices:
-
-        - We bill the job for what it *requests*, measured here, before a destination gets to
-          shrink it. A destination that caps cores does not reduce what the pool counts.
-        - We record usage as soon as we know a destination exists, before we finish picking one.
-          So a job can briefly hold a slot and then still be deferred (e.g. a second pool defers
-          it, or every candidate destination turns it away). We prefer this: counting a
-          not-yet-running job costs the user a slot for a moment, whereas *not* counting it could
-          let them exceed the limit -- the wrong direction for a safety cap. The overcount is
-          temporary: when the deferred job is retried it replaces its own old entry (see
-          ``AllocationStore.admit``), so nothing leaks permanently. A tighter scheme (reserve all
-          pools first, commit together, and release on a later failure) is possible but not yet
-          built.
+        The entity carries the request evaluated before destination rules or clamping. Admission
+        runs only after a destination has evaluated and converted successfully. All matching
+        pools are checked and recorded atomically so deferral cannot leave partial reservations.
 
         If the allocation store is unreachable we default to deferring the job ("fail-closed" --
         when we can't check, we say no) so an outage can't silently let users exceed their
@@ -414,44 +405,46 @@ class EntityToDestinationMapper(object):
         manager = self.resource_pools
         if manager is None or not self.pools or user is None:
             return
-        # Evaluate the requested resources once, here. evaluate_resources writes cores/mem/gpus
-        # onto the context it is given, so use a shallow copy to avoid polluting live evaluation.
-        evaluated = entity.evaluate_resources(copy.copy(context))
         req = ResourceUsage(
-            cores=float(evaluated.cores or 0),
-            mem=float(evaluated.mem or 0),
-            gpus=float(evaluated.gpus or 0),
+            cores=float(entity.cores or 0),
+            mem=float(entity.mem or 0),
+            gpus=float(entity.gpus or 0),
         )
         app = context["app"]
         job = context["job"]
-        for name in sorted(self.pools):
-            pool = self.pools[name]
+        admissions = []
+        # Resolve every matching pool before the single admission transaction.
+        for name, pool in sorted(self.pools.items()):
             if not pool.matches(entity):
                 continue
             budget = pool.budget_for(entity)
             kind = self._classify_pool_request(name, req, budget, pool)
             try:
-                ledger_ids = set(manager.store.read(name, user.id).keys())
-                drop = terminal_job_ids(app.model.context, ledger_ids)
-                admitted = manager.store.admit(
-                    name,
-                    user.id,
-                    job.id,
-                    req,
-                    kind=kind,
-                    budget=budget,
-                    max_oversize=pool.oversize.max_concurrent,
-                    reserve_pool=pool.oversize.reserve_pool,
-                    drop_job_ids=drop,
-                )
+                ledger_ids = set(manager.store.read(name, user.id))
             except StoreUnavailable:
                 if pool.fail_open:
                     log.warning("Resource pool '%s' store is unavailable; admitting job (fail_open)", name)
                     continue
                 log.warning("Resource pool '%s' store is unavailable; deferring job (fail-closed)", name)
                 raise JobNotReadyException()  # type: ignore[no-untyped-call]
-            if not admitted:
-                raise JobNotReadyException()  # type: ignore[no-untyped-call]
+            drop = terminal_job_ids(app.model.context, ledger_ids)
+            admissions.append(
+                PoolAdmission(name, req, kind, budget, pool.oversize.max_concurrent, pool.oversize.reserve_pool, drop)
+            )
+        if not admissions:
+            return
+        try:
+            admitted = manager.store.admit_many(user.id, job.id, admissions)
+        except StoreUnavailable:
+            # A batch write failure affects every included pool, so bypass it only if every
+            # one opted into fail-open. A permissive pool cannot weaken a strict pool.
+            if all(self.pools[a.pool].fail_open for a in admissions):
+                log.warning("Resource pool store is unavailable; admitting job (all pools fail_open)")
+                return
+            log.warning("Resource pool store is unavailable; deferring job (fail-closed)")
+            raise JobNotReadyException()  # type: ignore[no-untyped-call]
+        if not admitted:
+            raise JobNotReadyException()  # type: ignore[no-untyped-call]
 
     def map_to_destination(
         self,
@@ -493,12 +486,12 @@ class EntityToDestinationMapper(object):
 
         explain = ExplainCollector.from_context(context)
 
-        # 4. Admit the job to any resource pools that govern it, now that we know a destination
-        #    exists (so we never record an allocation for a job with nowhere to run).
-        if ranked_dest_entities:
-            self.admit_to_pools(context, evaluated_entity, user)
+        # Capture the requested resources before destination evaluation changes the context.
+        pool_entity = evaluated_entity
+        if ranked_dest_entities and self.pools and user is not None:
+            pool_entity = evaluated_entity.evaluate_resources(copy.copy(context))
 
-        # 5. Fully combine entity with matching destinations
+        # 4. Fully combine entity with matching destinations
         if ranked_dest_entities:
             wait_exception_raised = False
             for d in ranked_dest_entities:
@@ -510,7 +503,9 @@ class EntityToDestinationMapper(object):
                         )
                     dest_combined_entity = d.combine(cast(Destination, evaluated_entity))
                     evaluated_destination = dest_combined_entity.evaluate(context)
-                    # 5. Return the top-ranked destination that evaluates successfully
+                    destination = self.to_galaxy_destination(evaluated_destination)
+                    # 5. Commit all pool allocations only when this mapping can be returned.
+                    self.admit_to_pools(context, pool_entity, user)
                     if explain:
                         explain.add_step(
                             ExplainPhase.FINAL_RESULT,
@@ -521,7 +516,7 @@ class EntityToDestinationMapper(object):
                             f"params: {evaluated_destination.params}\n"
                             f"env: {evaluated_destination.env}",
                         )
-                    return self.to_galaxy_destination(evaluated_destination)
+                    return destination
                 except TryNextDestinationOrFail as ef:
                     if explain:
                         explain.add_step(
