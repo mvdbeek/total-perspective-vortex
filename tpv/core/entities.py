@@ -779,6 +779,8 @@ class PoolEntity(EntityWithRules):
 
     def matches(self, entity: Entity) -> bool:
         """Select jobs by positive tags, independently of destination requirements."""
+        if self.abstract:
+            return False
         job_tags = (
             set(entity.tpv_tags.require or []) | set(entity.tpv_tags.prefer or []) | set(entity.tpv_tags.accept or [])
         )

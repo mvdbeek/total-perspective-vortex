@@ -291,6 +291,29 @@ class TestResourcePoolMapping(unittest.TestCase):
     def _app(self):
         return mock_galaxy.App(create_model=True)
 
+    def test_abstract_pool_is_only_an_inheritance_template(self):
+        loader = TPVConfigLoader.from_url_or_path(FIXTURE)
+        loader.config.pools["template"] = PoolEntity(
+            id="template",
+            abstract=True,
+            max_concurrent_cores=1,
+            scheduling={"require": ["gpu"]},
+            evaluator=loader,
+        )
+        loader.config.pools["gpu"] = PoolEntity(
+            id="gpu",
+            inherits="template",
+            max_concurrent_cores=8,
+            evaluator=loader,
+        )
+        loader.process_entities(loader.config)
+        mapper = EntityToDestinationMapper(loader)
+        user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
+        dest = mapper.map_to_destination(self._app(), mock_galaxy.Tool("gpu_tool"), user, self._job(1))
+        self.assertEqual(dest.id, "local")
+        self.assertEqual(mapper.resource_pools.store.read("template", user.id), {})
+        self.assertIn(1, mapper.resource_pools.store.read("gpu", user.id))
+
     def test_under_budget_maps(self):
         mapper = self._mapper()
         user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
