@@ -1,0 +1,4 @@
+/* Keep helper descriptions readable inside the theme's responsive table. */
+.wy-table-responsive table.helper-functions-table td {
+    white-space: normal;
+}

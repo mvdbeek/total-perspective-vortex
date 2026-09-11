@@ -346,38 +346,41 @@ Helper functions
 TPV exposes a ``helpers`` module in the evaluation context, which provides utility functions
 that can be used in rules, rank functions, params, and other code blocks.
 
-+------------------------------------+--------------------------------------------------------------------------+
-| Helper                             | Description                                                              |
-+====================================+==========================================================================+
-| ``helpers.job_args_match(``        | Checks whether a dict of argument key/value pairs matches the job's      |
-| ``job, app, args)``                | input parameters. Useful for routing based on specific tool argument     |
-|                                    | values, similar to Galaxy's dynamic tool destination matching.           |
-+------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.weighted_random_``       | Returns a shuffled list of all destinations, weighted by each            |
-| ``sampling(destinations)``         | destination's optional ``params.weight`` value. Used in rank functions   |
-|                                    | to break ties or provide a fallback when load-based ranking fails.       |
-+------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.weighted_choice(items)`` | Selects one item from a weighted pool of ``{value, weight}`` dicts and    |
-|                                    | returns the chosen dict, mirroring ``random.choice``. Use               |
-|                                    | ``helpers.weighted_choice(items)["value"]`` when you need the underlying |
-|                                    | string. Primary use case is distributing jobs across multiple job        |
-|                                    | working directory roots. See the recipe in :doc:`tpv_by_example`.        |
-+------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.input_size(job)``        | Returns the total input dataset size in GB for the given job.            |
-+------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.concurrent_job_count_``  | Returns the number of queued/running jobs for the given tool (and        |
-| ``for_tool(app, tool, user)``      | optional user). Useful for limiting concurrent executions per tool.      |
-+------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.tag_values_match(``      | Returns ``True`` if an entity has all ``match_tag_values`` tags and none |
-| ``entity, match_tag_values,``      | of the ``exclude_tag_values`` tags.                                      |
-| ``exclude_tag_values)``            |                                                                          |
-+------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.tool_version_eq/lte/``   | Compare the tool's version against a given version string using the      |
-| ``lt/gte/gt(tool, version)``       | specified comparator.                                                    |
-+------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.get_tool_resource_``     | Extracts a specific resource field (cores, mem, gpus) from a tool's      |
-| ``field(tool, field_name)``        | resource requirements.                                                   |
-+------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.get_dataset_``           | Returns a dict mapping dataset IDs to their object store ID and file     |
-| ``attributes(datasets)``           | size in bytes.                                                           |
-+------------------------------------+--------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+   :class: helper-functions-table
+
+   * - Helper
+     - Description
+   * - ``helpers.job_args_match(job, app, args)``
+     - Checks whether a dict of argument key/value pairs matches the job's
+       input parameters. Useful for routing based on specific tool argument
+       values, similar to Galaxy's dynamic tool destination matching.
+   * - ``helpers.weighted_random_sampling(destinations)``
+     - Returns a shuffled list of all destinations, weighted by each
+       destination's optional ``params.weight`` value. Used in rank functions
+       to break ties or provide a fallback when load-based ranking fails.
+   * - ``helpers.weighted_choice(items)``
+     - Selects one item from a weighted pool of ``{value, weight}`` dicts and
+       returns the chosen dict, mirroring ``random.choice``. Use
+       ``helpers.weighted_choice(items)["value"]`` when you need the underlying
+       string. Primary use case is distributing jobs across multiple job
+       working directory roots. See the recipe in :doc:`tpv_by_example`.
+   * - ``helpers.input_size(job)``
+     - Returns the total input dataset size in GB for the given job.
+   * - ``helpers.concurrent_job_count_for_tool(app, tool, user)``
+     - Returns the number of queued/running jobs for the given tool (and
+       optional user). Useful for limiting concurrent executions per tool.
+   * - ``helpers.tag_values_match(entity, match_tag_values, exclude_tag_values)``
+     - Returns ``True`` if an entity has all ``match_tag_values`` tags and none
+       of the ``exclude_tag_values`` tags.
+   * - ``helpers.tool_version_eq/lte/lt/gte/gt(tool, version)``
+     - Compare the tool's version against a given version string using the
+       specified comparator.
+   * - ``helpers.get_tool_resource_field(tool, field_name)``
+     - Extracts a specific resource field (cores, mem, gpus) from a tool's
+       resource requirements.
+   * - ``helpers.get_dataset_attributes(datasets)``
+     - Returns a dict mapping dataset IDs to their object store ID and file
+       size in bytes.
