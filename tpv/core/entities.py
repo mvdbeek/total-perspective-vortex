@@ -764,9 +764,32 @@ class PoolEntity(EntityWithRules):
             new_entity.tpv_dest_tags = self.tpv_dest_tags.inherit(entity.tpv_dest_tags)
         return new_entity
 
+    @model_validator(mode="after")
+    def selector_tags_only(self) -> Self:
+        # A pool either governs a job or it does not; there is no ranking among pools, so
+        # prefer/accept cannot mean anything here. Fail at load rather than silently ignore them.
+        for kind in ("prefer", "accept"):
+            if getattr(self.tpv_dest_tags, kind):
+                raise ValueError(
+                    f"scheduling.{kind} has no meaning on a pool. A pool selects the jobs it "
+                    "governs with 'require' (job must carry all) and 'reject' (job must carry none)."
+                )
+        return self
+
     def matches(self, entity: Entity) -> bool:
-        """Whether this pool governs ``entity``, using the same tag match as Destination."""
-        return entity.tpv_tags.match(self.tpv_dest_tags)
+        """Whether this pool governs ``entity``.
+
+        Same vocabulary as a destination, but a pool never places demands back on the job. The
+        model to hold is *a destination that accepts every tag*: the job's own require/reject are
+        always satisfied, so only this pool's ``require`` (job must carry all) and ``reject`` (job
+        must carry none) decide. Using ``Destination``'s symmetric match here would exempt any job
+        carrying a ``require`` tag -- the norm for routing -- from an untagged pool, silently
+        bypassing enforcement.
+        """
+        job_tags = set(entity.tpv_tags.all_tag_values())
+        return set(self.tpv_dest_tags.require or []) <= job_tags and not (
+            set(self.tpv_dest_tags.reject or []) & job_tags
+        )
 
     def budget_for(self, entity: Entity) -> Budget:
         """Resolve the effective budget for ``entity``: a per-dimension value it carries (from a

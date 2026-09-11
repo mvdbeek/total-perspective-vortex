@@ -314,6 +314,33 @@ class TestResourcePoolMapping(unittest.TestCase):
         with self.assertRaises(JobNotReadyException):
             mapper.map_to_destination(self._app(), mock_galaxy.Tool("gpu_tool"), user, self._job(16))
 
+    def test_job_with_require_tags_is_still_governed_by_an_untagged_pool(self):
+        # A pool selects which jobs it governs; it does not negotiate capabilities with them.
+        # A job's own require tags describe what it needs from a *destination*, and must not
+        # exempt it from an untagged pool -- otherwise enforcement is silently bypassed.
+        mapper = self._mapper()
+        user = mock_galaxy.User("arthur", "arthur@vortex.org", id=1)
+        mapper.map_to_destination(self._app(), mock_galaxy.Tool("tagged_tool"), user, self._job(50))
+        self.assertIn(50, mapper.resource_pools.store.read("default", 1))
+
+    def test_pool_reject_tag_still_excludes_a_job(self):
+        # The 'default' pool rejects 'udt', so a udt job is governed only by the udt pool.
+        mapper = self._mapper()
+        user = mock_galaxy.User("zaphod", "zaphod@vortex.org", id=3)
+        with self.assertRaises(JobMappingException):
+            mapper.map_to_destination(self._app(), mock_galaxy.Tool("udt_tool"), user, self._job(51))
+        self.assertEqual(mapper.resource_pools.store.read("default", 3), {})
+
+    def test_prefer_and_accept_are_rejected_on_pools(self):
+        # Pools select jobs with require/reject only. prefer/accept have no meaning (there is no
+        # ranking among pools), so they must fail loudly at load rather than silently do nothing.
+        from tpv.core.entities import PoolEntity
+
+        for kind in ("prefer", "accept"):
+            with self.subTest(kind=kind):
+                with self.assertRaisesRegex(ValueError, f"scheduling.{kind}"):
+                    PoolEntity.model_validate({"scheduling": {kind: ["gpu"]}})
+
     def test_user_budget_override_wins_over_pool_default(self):
         # trillian's user entity raises max_concurrent_cores to 128; combine resolves it over the
         # default pool's 32, so two 64-core bigtool jobs are admitted as *normal* (not oversize).

@@ -6,7 +6,7 @@ global:
     class: tpv.core.resource_pool.InMemoryAllocationStore
 
 # First-class resource pools, alongside tools/users/roles/destinations. A pool governs a job when
-# the job's requested tags match the pool's scheduling tags (same tag match a destination uses).
+# the job's tags satisfy the pool's require/reject tags (one-directional, unlike destinations).
 pools:
   # Governs every non-UDT job (no require tags; rejects the udt tag so UDT jobs are handled solely
   # by the dedicated udt pool). Trusted big tools may exceed the budget up to one oversize job.
@@ -88,6 +88,15 @@ tools:
       accept:
         - udt
 
+  # Routing tags are ordinary in production configs. Such a job must still be governed by the
+  # untagged 'default' pool -- the pool selects jobs, it does not negotiate capabilities.
+  tagged_tool:
+    cores: 64
+    mem: 64
+    scheduling:
+      require:
+        - pulsar
+
 destinations:
   local:
     runner: local
@@ -99,5 +108,6 @@ destinations:
     scheduling:
       require: []
       prefer: []
-      accept: []
+      accept:
+        - pulsar
       reject: []
