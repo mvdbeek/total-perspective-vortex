@@ -48,7 +48,7 @@ TPV allows rules to be loaded from remote or local sources.
 
 .. code-block:: yaml
    :linenos:
-   :emphasize-lines: 7-9,14-19
+   :emphasize-lines: 6-8
 
    tpv_dispatcher:
     runner: dynamic
