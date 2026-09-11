@@ -649,6 +649,8 @@ helper falls back to an unweighted random selection so the configuration always
 resolves.
 
 This recipe requires Galaxy's ``job_working_directory`` job-concern support
-(Galaxy PR :issue:`23133` / :issue:`15616` / :issue:`20062`).  Without that
+(Galaxy PR `23133 <https://github.com/galaxyproject/galaxy/pull/23133>`_ /
+`15616 <https://github.com/galaxyproject/galaxy/pull/15616>`_ /
+`20062 <https://github.com/galaxyproject/galaxy/pull/20062>`_).  Without that
 change, the param is still set by TPV but Galaxy will use the object-store
 derived path instead.
