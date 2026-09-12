@@ -445,7 +445,7 @@ tools to conveniently override values, even across files. While this capability 
 treated with the same care as any global variable in a programming language.
 
 Multiple matches
----------------
+----------------
 If multiple regular expressions match, the matches are applied in order of appearance. Therefore, the convention is
 to specify more general rule matches first, and more specific matches later. This matching also applies across
 multiple TPV config files, again based on order of appearance.
@@ -548,7 +548,7 @@ as follows:
 
 .. code-block:: yaml
    :linenos:
-   :emphasize-lines: 7-9,14-19
+   :emphasize-lines: 6-8
 
    tpv_dispatcher:
      runner: dynamic
@@ -577,7 +577,7 @@ tools to use the maximum your cluster can support. You can achieve that effect a
 
 .. code-block:: yaml
    :linenos:
-   :emphasize-lines: 7-9,14-19
+   :emphasize-lines: 7-9
 
    destinations:
      slurm:
@@ -649,6 +649,8 @@ helper falls back to an unweighted random selection so the configuration always
 resolves.
 
 This recipe requires Galaxy's ``job_working_directory`` job-concern support
-(Galaxy PR :issue:`23133` / :issue:`15616` / :issue:`20062`).  Without that
+(Galaxy PR `23133 <https://github.com/galaxyproject/galaxy/pull/23133>`_ /
+`15616 <https://github.com/galaxyproject/galaxy/pull/15616>`_ /
+`20062 <https://github.com/galaxyproject/galaxy/pull/20062>`_).  Without that
 change, the param is still set by TPV but Galaxy will use the object-store
 derived path instead.
