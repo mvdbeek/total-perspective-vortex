@@ -220,7 +220,7 @@ Rules provide a means by which to conditionally change entity requirements.
        rules:
          - id: my_overridable_rule
            if: input_size < 5
-           fail: We don't run piddling datasets of {input_size}GB
+           fail: We don't run piddling datasets of {input_size}GiB
      bwa:
        scheduling:
          require:
@@ -277,7 +277,7 @@ recorded for a compressed dataset is its size on disk. The `helpers.get_input_si
        mem: min(max(int(helpers.get_input_size(job, "library|input_1") * 4), 8), 128)
 
 In this example, only the reads input of the hisat2 tool is sized, ignoring any other inputs the job may have, and
-the tool is allocated 4GB of memory per gigabyte of reads, clamped to between 8GB and 128GB. Since the reads are
+the tool is allocated 4GiB of memory per gibibyte of reads, clamped to between 8GiB and 128GiB. Since the reads are
 typically compressed, and the estimate must be based on their uncompressed size, their recorded size is first
 multiplied by 3.4.
 
@@ -570,7 +570,7 @@ that do not require the full core allocation. Conversely, some users can be allo
 `min_cores`.
 
 In addition, clamping resources can also be useful when using the TPV shared database. For example, the `canu` tool
-has a 96GB recommended memory requirement, which your local cluster may not have. However, you may still want to allow
+has a 96GiB recommended memory requirement, which your local cluster may not have. However, you may still want to allow
 the tool to run, albeit with lower resources. You can of course, locally override the `canu` tool and allocated less
 resources, but this can be tedious to do for a large number of tools. All you may really want, is to restrict all
 tools to use the maximum your cluster can support. You can achieve that effect as follows:
@@ -590,9 +590,9 @@ tools to use the maximum your cluster can support. You can achieve that effect a
        max_gpus: 1
 
 
-In the example above, we mark the slurm destination as accepting jobs up to 196GB in size, and therefore, the
-`canu` tool, which required 96GB, would successfully schedule there. However, we forcibly clamp the job's max_mem
-to 64GB, which is the actual memory your cluster can support. In this way, all tools in the shared
+In the example above, we mark the slurm destination as accepting jobs up to 196GiB in size, and therefore, the
+`canu` tool, which required 96GiB, would successfully schedule there. However, we forcibly clamp the job's max_mem
+to 64GiB, which is the actual memory your cluster can support. In this way, all tools in the shared
 database can still run, provided they do not exceed the specified `max_accepted` values.
 
 Giving a parameterized, custom name to a destination

@@ -48,7 +48,7 @@ class TestMapperResourceRequirements(unittest.TestCase):
         self.assertEqual(result, {"cores": 4})
 
     def test_extract_resource_requirements_from_tool_memory(self):
-        # Galaxy ram_min is in mebibytes, TPV mem is in GB
+        # Galaxy ram_min is in mebibytes, TPV mem is in GiB
         mem_req = ResourceRequirement("8192", "ram_min")
 
         tool = mock_galaxy.Tool("test_tool", resource_requirements=[mem_req])

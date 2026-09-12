@@ -150,7 +150,7 @@ class TestScenarios(unittest.TestCase):
     @responses.activate
     def test_scenario_trinity_job_too_much_data(self):
         """
-        Contextual fail message sent to user with reasons that there is too much data. (i.e. that 1TB is > 200GB)
+        Contextual fail message sent to user with reasons that there is too much data. (i.e. that 1000GiB is > 200GiB)
         """
         responses.add(
             method=responses.GET,
@@ -172,7 +172,7 @@ class TestScenarios(unittest.TestCase):
         rules_file = os.path.join(os.path.dirname(__file__), "fixtures/scenario-trinity-job-too-much-data.yml")
         with self.assertRaisesRegex(
             JobMappingException,
-            "Input file size of 1000.0GB is > maximum allowed 200GB limit",
+            "Input file size of 1000.0GiB is > maximum allowed 200GiB limit",
         ):
             self._map_to_destination(
                 tool,

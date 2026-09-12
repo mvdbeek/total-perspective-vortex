@@ -44,7 +44,7 @@ class TestMapperContext(unittest.TestCase):
         self.assertEqual(destination.params["native_spec"], "--mem 15 --cores 5 --gpus 4")
 
     def test_context_variable_overridden_in_rule(self):
-        # test that job will not fail with 40GB input size because large_input_size has been set to 60
+        # test that job will not fail with 40GiB input size because large_input_size has been set to 60
         tool = mock_galaxy.Tool("bwa")
         user = mock_galaxy.User("gargravarr", "fairycake@vortex.org")
         datasets = [mock_galaxy.DatasetAssociation("test", mock_galaxy.Dataset("test.txt", file_size=40 * 1024**3))]

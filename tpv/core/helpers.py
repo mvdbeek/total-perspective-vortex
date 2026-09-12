@@ -24,6 +24,7 @@ from galaxy.tools import Tool as GalaxyTool
 from tpv.core.entities import Destination, Entity
 from tpv.core.resource_requirements import TPVResourceFieldName, extract_resource_requirements_from_tool
 
+# Bytes per GiB; retain the historical name for existing TPV rules.
 GIGABYTES = 1024.0**3
 
 # Datatype extension suffixes that indicate a compressed dataset, e.g. `fastqsanger.gz`
@@ -110,7 +111,7 @@ def get_input_size(
     compression_factor: float = DEFAULT_COMPRESSION_FACTOR,
 ) -> float:
     """
-    Return the total size in gigabytes of a job's input datasets.
+    Return the total size in gibibytes of a job's input datasets.
 
     If `param_name` is given, only the datasets recorded for that tool parameter are totalled,
     otherwise all of the job's input datasets are. Compressed inputs are multiplied by

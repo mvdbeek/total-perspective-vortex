@@ -20,8 +20,8 @@ VALID_RESOURCE_TYPES = get_args(ResourceType)
 
 TPVResourceFieldName = Literal["cores", "max_cores", "mem", "max_mem", "gpus", "max_gpus"]
 
-# Galaxy's ``ram_min``/``ram_max`` resource requirements are in mebibytes (2**20 bytes), TPV's ``mem`` is in GB.
-MEBIBYTES_PER_GB = 1024
+# Galaxy's ``ram_min``/``ram_max`` resource requirements are in mebibytes (2**20 bytes), TPV's ``mem`` is in GiB.
+MEBIBYTES_PER_GIB = 1024
 
 
 class TPVResourceFields(TypedDict, total=False):
@@ -74,8 +74,8 @@ def extract_resource_requirements_from_tool(
                 value = resource_req.get_value()
                 if value is not None:
                     if resource_req.resource_type in ("ram_min", "ram_max"):
-                        # Galaxy (following CWL) expresses RAM in mebibytes, TPV expresses mem in GB.
-                        value = value / MEBIBYTES_PER_GB
+                        # Galaxy (following CWL) expresses RAM in mebibytes, TPV expresses mem in GiB.
+                        value = value / MEBIBYTES_PER_GIB
                     extracted[tpv_field] = value  # type: ignore[literal-required]
             except NotImplementedError:
                 # Skip expression evaluation for now

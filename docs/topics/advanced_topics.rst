@@ -128,13 +128,13 @@ Input sizes
 ===========
 
 Resource requirements are commonly calculated from the size of a job's inputs. The `input_size` context variable
-provides the total size in gigabytes of all of a job's inputs, and the `helpers.get_input_size` function provides
+provides the total size in gibibytes of all of a job's inputs, and the `helpers.get_input_size` function provides
 more control over how that total is arrived at, as introduced in :doc:`tpv_by_example`.
 
 Arguments
 ---------
 
-`get_input_size` returns a size in gigabytes, and accepts the following arguments:
+`get_input_size` returns a size in gibibytes, and accepts the following arguments:
 
 +----------------------------+----------------------------------------------------------------------------+
 | Argument                   | Description                                                                |
@@ -296,8 +296,8 @@ Mapped fields are:
 
 * ``cores_min`` -> ``cores``
 * ``cores_max`` -> ``max_cores``
-* ``ram_min`` -> ``mem`` (converted from mebibytes to GB)
-* ``ram_max`` -> ``max_mem`` (converted from mebibytes to GB)
+* ``ram_min`` -> ``mem`` (converted from mebibytes to GiB)
+* ``ram_max`` -> ``max_mem`` (converted from mebibytes to GiB)
 * ``cuda_device_count_min`` -> ``gpus``
 * ``cuda_device_count_max`` -> ``max_gpus``
 
@@ -305,8 +305,8 @@ If the same resource is also defined in TPV ``tools:``, the TPV configuration va
 auto-injected value.
 
 Galaxy expresses ``ram_min`` and ``ram_max`` in mebibytes (2**20 bytes), whereas TPV's ``mem`` and
-``max_mem`` are in GB, so the values are divided by 1024 when injected. A tool declaring ``ram_min=16384``
-is injected as ``mem: 16``.
+``max_mem`` are in gibibytes (GiB, 2**30 bytes), so the values are divided by 1024 when injected.
+A tool declaring ``ram_min=16384`` is injected as ``mem: 16``.
 
 For example, with a tool that declares ``cores_min=8`` and ``ram_min=16384`` in Galaxy's tool XML:
 
@@ -315,7 +315,7 @@ For example, with a tool that declares ``cores_min=8`` and ``ram_min=16384`` in 
 
    tools:
      default:
-      mem: 8  # The Galaxy tool wrapper's ram_min (16384 MiB -> 16 GB) would override this default value
+      mem: 8  # The Galaxy tool wrapper's ram_min (16384 MiB -> 16 GiB) would override this default value
      my_tool:
        mem: 32  # but this specific override takes priority over ram_min
    destinations:
@@ -361,13 +361,13 @@ that can be used in rules, rank functions, params, and other code blocks.
 | ``sampling(destinations)``         | destination's optional ``params.weight`` value. Used in rank functions   |
 |                                    | to break ties or provide a fallback when load-based ranking fails.       |
 +------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.weighted_choice(items)`` | Selects one item from a weighted pool of ``{value, weight}`` dicts and    |
-|                                    | returns the chosen dict, mirroring ``random.choice``. Use               |
+| ``helpers.weighted_choice(items)`` | Selects one item from a weighted pool of ``{value, weight}`` dicts and   |
+|                                    | returns the chosen dict, mirroring ``random.choice``. Use                |
 |                                    | ``helpers.weighted_choice(items)["value"]`` when you need the underlying |
 |                                    | string. Primary use case is distributing jobs across multiple job        |
 |                                    | working directory roots. See the recipe in :doc:`tpv_by_example`.        |
 +------------------------------------+--------------------------------------------------------------------------+
-| ``helpers.input_size(job)``        | Returns the total input dataset size in GB for the given job.            |
+| ``helpers.input_size(job)``        | Returns the total input dataset size in GiB for the given job.           |
 +------------------------------------+--------------------------------------------------------------------------+
 | ``helpers.concurrent_job_count_``  | Returns the number of queued/running jobs for the given tool (and        |
 | ``for_tool(app, tool, user)``      | optional user). Useful for limiting concurrent executions per tool.      |

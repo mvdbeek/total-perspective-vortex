@@ -5,10 +5,14 @@
 TotalPerspectiveVortex (TPV) is a plugin for the `Galaxy application`_ that can route
 entities (Tools, Users, Roles) to appropriate destinations with appropriate resource
 alloations (cores, gpus, memory), based on a configurable yaml file. For example, it could
-allocate 8 cores and 32GB of RAM to a bwa-mem job, and route it to a Slurm cluster, while
-allocating 2 cores and 4GB of RAM to an upload job, and route it to a local runner. These
+allocate 8 cores and 32GiB of RAM to a bwa-mem job, and route it to a Slurm cluster, while
+allocating 2 cores and 4GiB of RAM to an upload job, and route it to a local runner. These
 rules can also be shared community-wide, imported at runtime by any Galaxy deployment, and
 overridden locally when necessary.
+
+Memory resources (``mem``, ``min_mem``, ``max_mem``, ``min_accepted_mem``, and
+``max_accepted_mem``) and input dataset sizes are expressed in gibibytes (GiB), where
+1 GiB = 1024 MiB = 2**30 bytes.
 
 How it works
 ------------

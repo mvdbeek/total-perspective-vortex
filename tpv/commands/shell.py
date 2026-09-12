@@ -156,7 +156,7 @@ def create_parser() -> argparse.ArgumentParser:
         "dry-run", help="Perform a dry run test of a TPV configuration.", description=""
     )
     dry_run_parser.add_argument("--job-conf", type=str, required=True, help="Galaxy job configuration file")
-    dry_run_parser.add_argument("--input-size", type=int, help="Input dataset size (in GB)")
+    dry_run_parser.add_argument("--input-size", type=int, help="Input dataset size (in GiB)")
     dry_run_parser.add_argument(
         "--tool",
         type=str,
