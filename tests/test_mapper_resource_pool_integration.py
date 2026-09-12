@@ -15,16 +15,19 @@ The tests skip without one, except in CI (TPV_TEST_REQUIRE_VALKEY set), where th
 """
 
 import os
+import shutil
+import tempfile
 import time
 
 import pytest
+import yaml
 from galaxy.webapps.base import webapp
 from galaxy_test.base.populators import DatasetPopulator
 from galaxy_test.driver.integration_util import IntegrationTestCase
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "pools")
 VALKEY_URL = "redis://localhost:6379/0"
-KEY_PREFIX = "tpv-integration-test:pool"  # must match mapping-pools.yml
+KEY_PREFIX = "tpv-integration-test:pool"  # the fixture's value; each worker derives its own from it
 BUDGET_CORES = 8  # default pool, must match mapping-pools.yml
 JOB_CORES = 4  # pool_sleep, must match mapping-pools.yml
 ACTIVE = {"queued", "running"}
@@ -47,22 +50,48 @@ def _require_or_skip_valkey():
         )
 
 
-# Under xdist every worker starts its own Galaxy with its own database, so user and job ids
-# collide across workers (each Galaxy's first user and first job are id 1). Sharing one Valkey
-# between them would mix ledgers and let one worker's setUp flush another's mid-test. Pin the
-# whole class to a single worker; tox runs with --dist=loadgroup so this marker is honoured.
-@pytest.mark.xdist_group("valkey")
 class TestResourcePoolIntegration(IntegrationTestCase):
     default_tool_conf = os.path.join(FIXTURES, "tool_conf_pools.xml")
 
     @classmethod
     def setUpClass(cls):
         _require_or_skip_valkey()  # before the (expensive) Galaxy start-up
+        cls._isolate_valkey_keys_per_worker()
         super().setUpClass()
 
     @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(cls.config_dir, ignore_errors=True)
+
+    @classmethod
+    def _isolate_valkey_keys_per_worker(cls):
+        """Under xdist every worker runs its own Galaxy with its own database, so user and job
+        ids collide across workers (each Galaxy's first user and first job are id 1). Sharing
+        one Valkey between them would mix ledgers and let one worker's setUp flush another's
+        mid-test. Give each worker its own key_prefix: copy the fixture config with the prefix
+        patched, and a job conf pointing at the copy. The fixture file stays the readable
+        source of truth; only that one field differs."""
+        worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+        cls.key_prefix = f"{KEY_PREFIX}:{worker}"
+        cls.config_dir = tempfile.mkdtemp(prefix="tpv-pools-")
+
+        with open(os.path.join(FIXTURES, "mapping-pools.yml")) as f:
+            mapping = yaml.safe_load(f)
+        mapping["global"]["resource_pool_store"]["key_prefix"] = cls.key_prefix
+        mapping_path = os.path.join(cls.config_dir, "mapping-pools.yml")
+        with open(mapping_path, "w") as f:
+            yaml.safe_dump(mapping, f)
+
+        with open(os.path.join(FIXTURES, "job_conf_pools.yml")) as f:
+            job_conf = yaml.safe_load(f)
+        job_conf["execution"]["environments"]["tpv_dispatcher"]["tpv_config_files"] = [mapping_path]
+        with open(os.path.join(cls.config_dir, "job_conf_pools.yml"), "w") as f:
+            yaml.safe_dump(job_conf, f)
+
+    @classmethod
     def handle_galaxy_config_kwds(cls, config):
-        config["config_dir"] = FIXTURES
+        config["config_dir"] = cls.config_dir
         config["job_config_file"] = "job_conf_pools.yml"
         # Galaxy is a wheel in CI, not a checkout, so the sample configs it would otherwise
         # default to (lib/galaxy/config/sample/...) do not exist; point it at empty ones.
@@ -75,7 +104,7 @@ class TestResourcePoolIntegration(IntegrationTestCase):
         super().setUp()
         self.dataset_populator = DatasetPopulator(self.galaxy_interactor)
         self.valkey = _valkey()
-        for key in self.valkey.scan_iter(f"{KEY_PREFIX}:*"):  # isolate tests from each other
+        for key in self.valkey.scan_iter(f"{self.key_prefix}:*"):  # isolate tests from each other
             self.valkey.delete(key)
 
     # -- helpers -------------------------------------------------------------------------------
@@ -115,7 +144,7 @@ class TestResourcePoolIntegration(IntegrationTestCase):
 
     def _ledger(self, user_id, pool="default"):
         """{job_id: {"cores", "mem", "gpus", "kind"}} straight from Valkey."""
-        raw = self.valkey.hgetall(f"{KEY_PREFIX}:{pool}:user:{{{user_id}}}")
+        raw = self.valkey.hgetall(f"{self.key_prefix}:{pool}:user:{{{user_id}}}")
         ledger = {}
         for job_id, value in raw.items():
             cores, mem, gpus, kind = value.split("|")
@@ -174,7 +203,7 @@ class TestResourcePoolIntegration(IntegrationTestCase):
                     populator_b.wait_for_job(b_job, assert_ok=True, timeout=30)
 
             assert self._state(a_blocked) == "new", "user A's job ran while A's pool was full"
-            assert len(list(self.valkey.scan_iter(f"{KEY_PREFIX}:default:user:*"))) == 2, "one ledger per user"
+            assert len(list(self.valkey.scan_iter(f"{self.key_prefix}:default:user:*"))) == 2, "one ledger per user"
             self._wait_all_ok(*a_jobs, a_blocked)
 
     # -- oversize ------------------------------------------------------------------------------
