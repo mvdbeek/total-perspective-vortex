@@ -30,6 +30,7 @@ from .loader import TPVConfigLoader
 from .resource_pool import (
     NORMAL,
     OVERSIZE,
+    AllocationStore,
     Budget,
     PoolAdmission,
     ResourcePoolManager,
@@ -46,7 +47,7 @@ EntityType = TypeVar("EntityType", bound=Entity)
 
 class EntityToDestinationMapper(object):
 
-    def __init__(self, loader: TPVConfigLoader):
+    def __init__(self, loader: TPVConfigLoader, resource_pool_store: AllocationStore | None = None):
         self.loader = loader
         self.config = loader.config
         self.destinations = self.config.destinations
@@ -62,7 +63,12 @@ class EntityToDestinationMapper(object):
                 "not set. Add the store wiring (e.g. a ValkeyAllocationStore) so enforcement is "
                 "active, or remove the pools."
             )
-        self.resource_pools = ResourcePoolManager(store_config) if store_config else None
+        if resource_pool_store is not None:
+            # Caller-supplied store (a dry run passes an in-memory one so it never reads from or
+            # writes to the deployment's accounting). The config check above still applies.
+            self.resource_pools: ResourcePoolManager | None = ResourcePoolManager(resource_pool_store)
+        else:
+            self.resource_pools = ResourcePoolManager(store_config.build_store()) if store_config else None
         self.lookup_tool_regex = functools.lru_cache(maxsize=None)(self.__compile_tool_regex)
         self._cache_inherit_matching_entities: Any = Cache(maxsize=0)
 
@@ -412,26 +418,56 @@ class EntityToDestinationMapper(object):
         )
         app = context["app"]
         job = context["job"]
+        explain = ExplainCollector.from_context(context)
         admissions = []
         # Resolve every matching pool before the single admission transaction.
         for name, pool in sorted(self.pools.items()):
             if not pool.matches(entity):
                 continue
             budget = pool.budget_for(entity)
-            kind = self._classify_pool_request(name, req, budget, pool)
+            try:
+                kind = self._classify_pool_request(name, req, budget, pool)
+            except JobMappingException as e:
+                if explain:
+                    explain.add_step(ExplainPhase.RESOURCE_POOLS, f"Pool '{name}': REJECTED", str(e))
+                raise
+            if explain:
+                explain.add_step(
+                    ExplainPhase.RESOURCE_POOLS,
+                    f"Pool '{name}' governs this job: request is {kind}",
+                    f"request: cores={req.cores}, mem={req.mem}, gpus={req.gpus}\n"
+                    f"budget:  cores={budget.cores}, mem={budget.mem}, gpus={budget.gpus}"
+                    + (
+                        f"\noversize: max_jobs={pool.oversize.max_concurrent}, "
+                        f"hard_max cores={pool.oversize.hard_max_cores}, mem={pool.oversize.hard_max_mem}, "
+                        f"gpus={pool.oversize.hard_max_gpus}"
+                        if kind == OVERSIZE
+                        else ""
+                    ),
+                )
             try:
                 ledger_ids = set(manager.store.read(name, user.id))
             except StoreUnavailable:
                 if pool.fail_open:
                     log.warning("Resource pool '%s' store is unavailable; admitting job (fail_open)", name)
+                    if explain:
+                        explain.add_step(
+                            ExplainPhase.RESOURCE_POOLS, f"Pool '{name}': store unavailable, fail_open -> admitted"
+                        )
                     continue
                 log.warning("Resource pool '%s' store is unavailable; deferring job (fail-closed)", name)
+                if explain:
+                    explain.add_step(
+                        ExplainPhase.RESOURCE_POOLS, f"Pool '{name}': store unavailable, fail-closed -> deferred"
+                    )
                 raise JobNotReadyException()  # type: ignore[no-untyped-call]
             drop = terminal_job_ids(app.model.context, ledger_ids)
             admissions.append(
                 PoolAdmission(name, req, kind, budget, pool.oversize.max_concurrent, pool.oversize.reserve_pool, drop)
             )
         if not admissions:
+            if explain:
+                explain.add_step(ExplainPhase.RESOURCE_POOLS, "No resource pools govern this job")
             return
         try:
             admitted = manager.store.admit_many(user.id, job.id, admissions)
@@ -440,11 +476,24 @@ class EntityToDestinationMapper(object):
             # one opted into fail-open. A permissive pool cannot weaken a strict pool.
             if all(self.pools[a.pool].fail_open for a in admissions):
                 log.warning("Resource pool store is unavailable; admitting job (all pools fail_open)")
+                if explain:
+                    explain.add_step(
+                        ExplainPhase.RESOURCE_POOLS, "Store unavailable; every pool is fail_open -> admitted"
+                    )
                 return
             log.warning("Resource pool store is unavailable; deferring job (fail-closed)")
+            if explain:
+                explain.add_step(ExplainPhase.RESOURCE_POOLS, "Store unavailable; fail-closed -> deferred")
             raise JobNotReadyException()  # type: ignore[no-untyped-call]
+        pool_names = ", ".join(a.pool for a in admissions)
         if not admitted:
+            if explain:
+                explain.add_step(
+                    ExplainPhase.RESOURCE_POOLS, f"DEFERRED: user's current usage leaves no room in: {pool_names}"
+                )
             raise JobNotReadyException()  # type: ignore[no-untyped-call]
+        if explain:
+            explain.add_step(ExplainPhase.RESOURCE_POOLS, f"Admitted and recorded in: {pool_names}")
 
     def map_to_destination(
         self,

@@ -372,8 +372,8 @@ class ResourcePoolManager:
     mapper (see :class:`tpv.core.mapper.EntityToDestinationMapper`).
     """
 
-    def __init__(self, store_config: StoreConfig):
-        self.store: AllocationStore = store_config.build_store()
+    def __init__(self, store: AllocationStore):
+        self.store: AllocationStore = store
 
 
 def terminal_job_ids(sa_session: scoped_session[Session], job_ids: set[int]) -> set[int]:
