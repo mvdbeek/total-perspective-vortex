@@ -51,7 +51,7 @@ tools:
           require:
             - highmem
       - if: input_size >= 200
-        fail: "Input file size of {input_size}GB is > maximum allowed 200GB limit"
+        fail: "Input file size of {input_size}GiB is > maximum allowed 200GiB limit"
 destinations:
   slurm:
     runner: slurm
